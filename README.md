@@ -35,6 +35,6 @@
 
 ## 👨‍💻 Credits
 
-**Created by Vibe.**
+**Created by Juan Santos Vibe Coding.**
 
 This project was built to demonstrate the power of multimodal AI in physical security and surveillance auditing.
