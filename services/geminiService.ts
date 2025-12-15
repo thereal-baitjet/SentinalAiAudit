@@ -24,26 +24,6 @@ const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: s
   });
 };
 
-// Helper to poll for file active state
-const waitForFileActive = async (ai: GoogleGenAI, fileName: string): Promise<void> => {
-  console.log(`Polling for file processing: ${fileName}`);
-  // Initial delay
-  await new Promise((resolve) => setTimeout(resolve, 2000));
-  
-  let file = await ai.files.get({ name: fileName });
-  
-  while (file.state === "PROCESSING") {
-    console.log("File is processing...");
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    file = await ai.files.get({ name: fileName });
-  }
-  
-  if (file.state !== "ACTIVE") {
-    throw new Error(`File processing failed with state: ${file.state}`);
-  }
-  console.log("File is active and ready for analysis.");
-};
-
 const responseSchema: Schema = {
   type: Type.OBJECT,
   properties: {
@@ -91,57 +71,26 @@ export const analyzeVideoContent = async (
   // Using gemini-2.5-flash as it is excellent for video tasks
   const model = "gemini-2.5-flash";
 
-  let videoPart;
-
-  // STRATEGY: 
-  // Google Gemini Inline Data Limit is strictly ~20MB. 
-  // We use 18MB as a safety buffer for Base64 overhead.
-  const MAX_INLINE_SIZE = 18 * 1024 * 1024; 
-
   try {
-    if (file.size < MAX_INLINE_SIZE) {
-      // Small file: Inline Base64 (Reliable in browser)
-      console.log("File < 18MB, using inline strategy.");
-      onProgress(AnalysisState.ANALYZING);
-      videoPart = await fileToGenerativePart(file);
-    } else {
-      // Large file: MUST use File API
-      // If this fails in a browser due to CORS, we cannot fall back to inline
-      // because it will trigger 413 Entity Too Large.
-      try {
-        onProgress(AnalysisState.UPLOADING);
-        console.log("Attempting upload via File API...");
-        
-        const uploadResponse = await ai.files.upload({
-          file: file,
-          config: { displayName: file.name, mimeType: file.type }
-        });
-
-        console.log(`Upload complete: ${uploadResponse.uri}`);
-        
-        // We must wait for the file to be processed by Google
-        await waitForFileActive(ai, uploadResponse.name);
-
-        // Now we can analyze
-        onProgress(AnalysisState.ANALYZING);
-        
-        videoPart = {
-          fileData: {
-            fileUri: uploadResponse.uri,
-            mimeType: uploadResponse.mimeType
-          }
-        };
-      } catch (uploadError: any) {
-        console.error("File API Upload Failed:", uploadError);
-        // We catch this specific error to provide a better message than the generic one
-        // And crucially, we DO NOT fall back to inline for files > 18MB to avoid the 413 crash.
-        throw new Error(
-          `Unable to process this file (${(file.size / 1024 / 1024).toFixed(1)}MB). ` +
-          `In this browser environment, files are limited to ~18MB unless the Gemini File API allows cross-origin uploads (which appears to be blocked). ` +
-          `Please try a smaller file.`
-        );
-      }
+    // STRICT MVP RULE: Only inline uploads allowed to avoid deployed CORS issues.
+    // The UI limits files to 20MB. 
+    // Technically, Base64 adds ~33% size. 
+    // 20MB file -> 26MB Base64.
+    // Google API limit is 20MB for payload. 
+    // So strictly speaking, files > ~15MB might still error with "413 Payload Too Large" from the API.
+    // However, removing the File API upload logic prevents the application from hanging/crashing with 404s.
+    
+    if (file.size > 22 * 1024 * 1024) {
+         // Fail fast if somehow a huge file got here
+         throw new Error("File is too large for inline processing. Please use a file smaller than 20MB.");
     }
+
+    onProgress(AnalysisState.UPLOADING);
+    console.log("Processing file inline...");
+    const videoPart = await fileToGenerativePart(file);
+    
+    // Switch to analyzing state
+    onProgress(AnalysisState.ANALYZING);
 
     const systemInstruction = `
       Role: Senior Security Operations Center (SOC) Analyst

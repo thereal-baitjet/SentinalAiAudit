@@ -3,12 +3,27 @@ import { UploadIcon } from './Icons';
 
 interface UploadZoneProps {
   onFileSelect: (file: File) => void;
+  onError: (msg: string) => void;
   isProcessing: boolean;
 }
 
-const UploadZone: React.FC<UploadZoneProps> = ({ onFileSelect, isProcessing }) => {
+const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+
+const UploadZone: React.FC<UploadZoneProps> = ({ onFileSelect, onError, isProcessing }) => {
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const validateAndSelect = (file: File) => {
+    if (file.size > MAX_FILE_SIZE) {
+      onError("File is too large for this MVP demo. Please upload a video smaller than 20MB.");
+      return;
+    }
+    if (!file.type.startsWith('video/')) {
+      onError("Invalid file type. Please upload a video file (MP4, MOV).");
+      return;
+    }
+    onFileSelect(file);
+  };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -23,12 +38,7 @@ const UploadZone: React.FC<UploadZoneProps> = ({ onFileSelect, isProcessing }) =
     e.preventDefault();
     setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const file = e.dataTransfer.files[0];
-      if (file.type.startsWith('video/')) {
-        onFileSelect(file);
-      } else {
-        alert("Please upload a valid video file.");
-      }
+      validateAndSelect(e.dataTransfer.files[0]);
     }
   };
 
@@ -38,7 +48,7 @@ const UploadZone: React.FC<UploadZoneProps> = ({ onFileSelect, isProcessing }) =
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      onFileSelect(e.target.files[0]);
+      validateAndSelect(e.target.files[0]);
     }
   };
 
@@ -73,8 +83,8 @@ const UploadZone: React.FC<UploadZoneProps> = ({ onFileSelect, isProcessing }) =
           <h3 className="text-lg font-medium text-zinc-100">Upload CCTV Footage</h3>
           <p className="text-zinc-400 text-sm mt-1">Drag & drop or click to browse (MP4, MOV)</p>
         </div>
-        <div className="text-xs text-zinc-500 mt-2">
-            Large files (>20MB) supported via secure upload
+        <div className="text-xs text-amber-500/80 bg-amber-950/30 px-3 py-1 rounded border border-amber-900/50 mt-2 font-mono">
+            MVP Demo Limit: Max 20MB File Size
         </div>
       </div>
     </div>

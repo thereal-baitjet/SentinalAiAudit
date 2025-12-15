@@ -86,6 +86,12 @@ const App: React.FC = () => {
     setAnalysisState(AnalysisState.IDLE);
   }, []);
 
+  const handleUploadError = useCallback((msg: string) => {
+    setErrorMsg(msg);
+    setVideoFile(null);
+    setAnalysisState(AnalysisState.IDLE);
+  }, []);
+
   const startAnalysis = useCallback(async () => {
     if (!videoFile) return;
 
@@ -236,6 +242,7 @@ const App: React.FC = () => {
                 <>
                   <UploadZone 
                     onFileSelect={handleFileSelect} 
+                    onError={handleUploadError}
                     isProcessing={false} 
                   />
                   
@@ -310,7 +317,7 @@ const App: React.FC = () => {
                </h3>
                <p className="text-zinc-500 text-sm">
                  {analysisState === AnalysisState.UPLOADING 
-                   ? "Sending video securely to Gemini (this may take a moment for large files)" 
+                   ? "Sending video secure inline data (processing may take a moment)" 
                    : "Detecting entities, behaviors, and anomalies..."}
                </p>
              </div>
