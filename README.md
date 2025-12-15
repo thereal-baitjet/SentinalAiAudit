@@ -27,6 +27,16 @@
 *   **AI/ML**: Google Gemini API (`@google/genai`)
 *   **Model**: `gemini-2.5-flash`
 
+## 🔒 Security & Deployment
+
+To deploy this application safely without exposing your personal API quota:
+
+1.  **Do NOT set the `API_KEY` environment variable** in your hosting provider (Vercel, Netlify, etc.).
+2.  Deploy the application as a static site.
+3.  When you (or a user) opens the deployed site, click the **Key Icon** in the top right.
+4.  Enter a Gemini API Key manually. This key is stored in the **User's Browser Local Storage** only.
+5.  This ensures that every user provides their own key, and your personal key remains private and safe.
+
 ## 📦 How it Works
 
 1.  **Upload**: The user uploads a video file. Small files are processed inline; large files are securely uploaded via the Gemini File API.
@@ -35,6 +45,6 @@
 
 ## 👨‍💻 Credits
 
-**Created by Juan Santos Vibe Coding.**
+**Created by Vibe.**
 
 This project was built to demonstrate the power of multimodal AI in physical security and surveillance auditing.

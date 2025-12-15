@@ -15,35 +15,69 @@ const App: React.FC = () => {
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [seekTime, setSeekTime] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  
+  // Auth state
   const [hasApiKey, setHasApiKey] = useState<boolean>(false);
+  const [customApiKey, setCustomApiKey] = useState<string>('');
+  const [showSettings, setShowSettings] = useState<boolean>(false);
 
   useEffect(() => {
     const checkApiKey = async () => {
+      // 1. Check for AI Studio env
       if (isAIStudio && (window as any).aistudio.hasSelectedApiKey) {
         const hasKey = await (window as any).aistudio.hasSelectedApiKey();
         setHasApiKey(hasKey);
-      } else {
-        // If the platform wrapper isn't present, assume env vars are handled externally or user will need to configure them.
+        return;
+      } 
+      
+      // 2. Check for manual key in localStorage
+      const storedKey = localStorage.getItem('sentinal_api_key');
+      if (storedKey) {
+        setCustomApiKey(storedKey);
         setHasApiKey(true);
+        return;
       }
+
+      // 3. Check for build-time env var (Only use this for local dev, avoid in production for security)
+      if (process.env.API_KEY) {
+        setHasApiKey(true);
+        return;
+      }
+      
+      setHasApiKey(false);
     };
     checkApiKey();
   }, []);
 
-  const handleApiKeySelect = async () => {
+  const handleApiKeyAction = async () => {
     if (isAIStudio && (window as any).aistudio.openSelectKey) {
-      const selected = await (window as any).aistudio.openSelectKey();
-      // Assume success if promise resolves, or verify logic if provided by SDK
+      await (window as any).aistudio.openSelectKey();
       setHasApiKey(true);
-      // Clear any previous API key errors
-      if (errorMsg && errorMsg.includes("API Key")) {
-        setErrorMsg(null);
-      }
+      if (errorMsg && errorMsg.includes("API Key")) setErrorMsg(null);
+    } else {
+      // Open manual entry modal
+      setShowSettings(true);
     }
   };
 
+  const saveCustomKey = (key: string) => {
+    localStorage.setItem('sentinal_api_key', key);
+    setCustomApiKey(key);
+    setHasApiKey(true);
+    setShowSettings(false);
+    if (errorMsg && errorMsg.includes("API Key")) setErrorMsg(null);
+  };
+
+  const clearCustomKey = () => {
+    localStorage.removeItem('sentinal_api_key');
+    setCustomApiKey('');
+    setHasApiKey(false);
+    setShowSettings(false);
+    setAnalysisResult(null);
+    setVideoFile(null);
+  };
+
   const handleFileSelect = useCallback((file: File) => {
-    // Removed 25MB limit. Now supporting larger files via File API.
     setErrorMsg(null);
     setVideoFile(file);
     const url = URL.createObjectURL(file);
@@ -55,34 +89,42 @@ const App: React.FC = () => {
   const startAnalysis = useCallback(async () => {
     if (!videoFile) return;
 
-    // Initial state
     setAnalysisState(AnalysisState.UPLOADING);
     setErrorMsg(null);
 
     try {
-      // Pass the setAnalysisState callback to update progress (Uploading -> Analyzing)
+      // Pass the setAnalysisState callback and the custom API key (if set)
       const result = await analyzeVideoContent(videoFile, (state) => {
         setAnalysisState(state);
-      });
+      }, customApiKey);
       
       setAnalysisResult(result);
       setAnalysisState(AnalysisState.COMPLETE);
     } catch (error: any) {
       setAnalysisState(AnalysisState.ERROR);
       
-      // If the API key is missing or invalid (entity not found), prompt for selection again
-      if (error.message && (error.message.includes("Requested entity was not found") || error.message.includes("403") || error.message.includes("API Key is missing"))) {
-         if (isAIStudio) {
-            setHasApiKey(false); // This forces the UI to show the select key screen
+      const isAuthError = error.message && (
+        error.message.includes("Requested entity was not found") || 
+        error.message.includes("403") || 
+        error.message.includes("API Key is missing")
+      );
+
+      if (isAuthError) {
+         setHasApiKey(false);
+         // If we had a stored key, it might be invalid
+         if (customApiKey && !isAIStudio) {
+            setErrorMsg("The provided API Key appears to be invalid or expired.");
+            setShowSettings(true);
+         } else if (isAIStudio) {
             setErrorMsg("API Key invalid, missing, or project not found. Please select a valid key.");
          } else {
-            setErrorMsg(error.message);
+             setErrorMsg(error.message);
          }
       } else {
          setErrorMsg(error.message || "Failed to analyze video. Please check API key and try again.");
       }
     }
-  }, [videoFile]);
+  }, [videoFile, customApiKey]);
 
   const parseTimestamp = (timeStr: string): number => {
     const parts = timeStr.split(':').map(Number);
@@ -102,6 +144,54 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans selection:bg-blue-500/30">
+      
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-full max-w-md shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <h3 className="text-xl font-bold text-white mb-2">API Configuration</h3>
+            <p className="text-zinc-400 text-sm mb-6 leading-relaxed">
+              Your API Key is stored locally in your browser's storage. It is never sent to our servers.
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-zinc-500 uppercase mb-1">Gemini API Key</label>
+                <input 
+                  type="password"
+                  placeholder="AIza..."
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-white focus:ring-2 focus:ring-blue-600 outline-none transition-all"
+                  value={customApiKey}
+                  onChange={(e) => setCustomApiKey(e.target.value)}
+                />
+              </div>
+              <div className="flex justify-between items-center pt-4">
+                <button
+                  onClick={clearCustomKey}
+                  className="text-red-400 hover:text-red-300 text-sm font-medium hover:underline"
+                >
+                  Clear Key
+                </button>
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => setShowSettings(false)}
+                    className="text-zinc-400 hover:text-white px-4 py-2 text-sm"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    onClick={() => saveCustomKey(customApiKey)}
+                    className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded font-medium text-sm transition-colors"
+                    disabled={!customApiKey}
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
@@ -112,15 +202,13 @@ const App: React.FC = () => {
             <h1 className="font-bold text-xl tracking-tight">Sentinal<span className="text-zinc-500 font-normal">AI Audit</span></h1>
           </div>
           <div className="flex items-center gap-4">
-             {isAIStudio && (
-                <button 
-                  onClick={handleApiKeySelect}
-                  className="text-zinc-400 hover:text-white transition-colors p-2 rounded hover:bg-zinc-900 border border-transparent hover:border-zinc-800"
-                  title="Change API Key"
-                >
-                  <KeyIcon className="w-5 h-5" />
-                </button>
-             )}
+             <button 
+               onClick={handleApiKeyAction}
+               className={`transition-colors p-2 rounded border ${hasApiKey ? 'text-zinc-400 hover:text-white hover:bg-zinc-900 border-transparent hover:border-zinc-800' : 'text-yellow-500 bg-yellow-500/10 border-yellow-500/50 animate-pulse'}`}
+               title="Configure API Key"
+             >
+               <KeyIcon className="w-5 h-5" />
+             </button>
              <span className="hidden sm:inline-block text-xs font-mono text-zinc-500 px-2 py-1 bg-zinc-900 rounded border border-zinc-800">
                Model: gemini-2.5-flash
              </span>
@@ -143,8 +231,8 @@ const App: React.FC = () => {
                 </p>
               </div>
 
-              {/* Show Upload Zone only if Key is selected (or platform wrapper absent) */}
-              {!isAIStudio || hasApiKey ? (
+              {/* Show Upload Zone if Key is valid */}
+              {hasApiKey ? (
                 <>
                   <UploadZone 
                     onFileSelect={handleFileSelect} 
@@ -180,20 +268,20 @@ const App: React.FC = () => {
                    <div className="space-y-2">
                       <h3 className="text-xl font-medium text-zinc-100">Authentication Required</h3>
                       <p className="text-zinc-400 max-w-sm mx-auto text-sm">
-                         To analyze footage with Sentinal AI, you must provide a valid API Key from a paid Google Cloud Project.
+                         To analyze footage, you must provide a valid Gemini API Key.
                       </p>
                    </div>
                    <button 
-                      onClick={handleApiKeySelect}
+                      onClick={handleApiKeyAction}
                       className="inline-flex items-center justify-center gap-2 bg-zinc-100 hover:bg-white text-zinc-950 px-6 py-3 rounded-lg font-bold transition-all"
                    >
-                      <span>Select API Key</span>
+                      <span>{isAIStudio ? "Select API Key" : "Enter API Key"}</span>
                       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5">
                         <path fillRule="evenodd" d="M3 10a.75.75 0 0 1 .75-.75h10.638L10.23 5.29a.75.75 0 1 1 1.04-1.08l5.5 5.25a.75.75 0 0 1 0 1.08l-5.5 5.25a.75.75 0 1 1-1.04-1.08l4.158-3.96H3.75A.75.75 0 0 1 3 10Z" clipRule="evenodd" />
                       </svg>
                    </button>
                    <p className="text-xs text-zinc-600">
-                      Need help? <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="underline hover:text-zinc-400">View Billing Documentation</a>
+                      Need a key? <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="underline hover:text-zinc-400">Get one here</a>
                    </p>
                 </div>
               )}

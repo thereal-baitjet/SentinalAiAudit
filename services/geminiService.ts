@@ -6,7 +6,12 @@ const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: s
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => {
-      const base64String = (reader.result as string).split(',')[1];
+      const result = reader.result as string;
+      if (!result) {
+        reject(new Error("Failed to read file"));
+        return;
+      }
+      const base64String = result.split(',')[1];
       resolve({
         inlineData: {
           data: base64String,
@@ -71,11 +76,14 @@ const responseSchema: Schema = {
 
 export const analyzeVideoContent = async (
   file: File, 
-  onProgress: (state: AnalysisState) => void
+  onProgress: (state: AnalysisState) => void,
+  apiKeyOverride?: string
 ): Promise<AnalysisResult> => {
-  const apiKey = process.env.API_KEY;
+  // Use the override key (from UI) or fallback to env var
+  const apiKey = apiKeyOverride || process.env.API_KEY;
+  
   if (!apiKey) {
-    throw new Error("API Key is missing. Please select a valid key using the Key icon in the top right.");
+    throw new Error("API Key is missing. Please click the Key icon in the top right to configure it.");
   }
 
   const ai = new GoogleGenAI({ apiKey });
@@ -85,38 +93,59 @@ export const analyzeVideoContent = async (
 
   let videoPart;
 
-  // 20MB limit for inline data. Larger files use File API.
-  const INLINE_SIZE_LIMIT = 20 * 1024 * 1024;
+  // STRATEGY: 
+  // 1. Try inline for files < 50MB (faster, no CORS issues).
+  // 2. Try File API for files > 50MB.
+  // 3. If File API fails (common in browsers due to CORS), FALLBACK to inline (up to ~500MB).
+  const PREFER_INLINE_THRESHOLD = 50 * 1024 * 1024; // 50MB
+  const FORCE_INLINE_FALLBACK_LIMIT = 500 * 1024 * 1024; // 500MB (Browser memory limit risk)
 
   try {
-    if (file.size < INLINE_SIZE_LIMIT) {
+    const isSmallFile = file.size < PREFER_INLINE_THRESHOLD;
+
+    if (isSmallFile) {
       // Small file: Inline Base64
       onProgress(AnalysisState.ANALYZING);
       videoPart = await fileToGenerativePart(file);
     } else {
-      // Large file: File API Upload
-      onProgress(AnalysisState.UPLOADING);
-      console.log("Uploading large file via File API...");
-      
-      const uploadResponse = await ai.files.upload({
-        file: file,
-        config: { displayName: file.name, mimeType: file.type }
-      });
+      // Large file: Attempt File API Upload
+      try {
+        onProgress(AnalysisState.UPLOADING);
+        console.log("Attempting upload via File API...");
+        
+        const uploadResponse = await ai.files.upload({
+          file: file,
+          config: { displayName: file.name, mimeType: file.type }
+        });
 
-      console.log(`Upload complete: ${uploadResponse.uri}`);
-      
-      // We must wait for the file to be processed by Google
-      await waitForFileActive(ai, uploadResponse.name);
+        console.log(`Upload complete: ${uploadResponse.uri}`);
+        
+        // We must wait for the file to be processed by Google
+        await waitForFileActive(ai, uploadResponse.name);
 
-      // Now we can analyze
-      onProgress(AnalysisState.ANALYZING);
-      
-      videoPart = {
-        fileData: {
-          fileUri: uploadResponse.uri,
-          mimeType: uploadResponse.mimeType
+        // Now we can analyze
+        onProgress(AnalysisState.ANALYZING);
+        
+        videoPart = {
+          fileData: {
+            fileUri: uploadResponse.uri,
+            mimeType: uploadResponse.mimeType
+          }
+        };
+      } catch (uploadError: any) {
+        console.warn("File API upload failed, attempting inline fallback...", uploadError);
+        
+        // If upload fails (e.g. CORS), check if we can fallback to inline
+        if (file.size < FORCE_INLINE_FALLBACK_LIMIT) {
+           console.log("Falling back to inline data strategy.");
+           // Reset state to analyzing to show spinner
+           onProgress(AnalysisState.ANALYZING);
+           videoPart = await fileToGenerativePart(file);
+        } else {
+           // File is too big for inline fallback
+           throw new Error(`File upload failed and file is too large for browser processing (${(file.size/1024/1024).toFixed(0)}MB). Try a smaller file.`);
         }
-      };
+      }
     }
 
     const systemInstruction = `
