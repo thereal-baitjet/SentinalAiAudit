@@ -1,0 +1,5 @@
+{
+  "name": "Sentinal AI Audit",
+  "description": "A security video auditing tool utilizing Gemini 2.5 Flash to analyze CCTV footage, generating structured searchable timelines of security events.",
+  "requestFramePermissions": []
+}
