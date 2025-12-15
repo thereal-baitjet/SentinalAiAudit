@@ -34,7 +34,7 @@ const waitForFileActive = async (ai: GoogleGenAI, fileName: string): Promise<voi
   
   while (file.state === "PROCESSING") {
     console.log("File is processing...");
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await new Promise((resolve) => setTimeout(resolve, 2000));
     file = await ai.files.get({ name: fileName });
   }
   
@@ -94,21 +94,20 @@ export const analyzeVideoContent = async (
   let videoPart;
 
   // STRATEGY: 
-  // 1. Try inline for files < 50MB (faster, no CORS issues).
-  // 2. Try File API for files > 50MB.
-  // 3. If File API fails (common in browsers due to CORS), FALLBACK to inline (up to ~500MB).
-  const PREFER_INLINE_THRESHOLD = 50 * 1024 * 1024; // 50MB
-  const FORCE_INLINE_FALLBACK_LIMIT = 500 * 1024 * 1024; // 500MB (Browser memory limit risk)
+  // Google Gemini Inline Data Limit is strictly ~20MB. 
+  // We use 18MB as a safety buffer for Base64 overhead.
+  const MAX_INLINE_SIZE = 18 * 1024 * 1024; 
 
   try {
-    const isSmallFile = file.size < PREFER_INLINE_THRESHOLD;
-
-    if (isSmallFile) {
-      // Small file: Inline Base64
+    if (file.size < MAX_INLINE_SIZE) {
+      // Small file: Inline Base64 (Reliable in browser)
+      console.log("File < 18MB, using inline strategy.");
       onProgress(AnalysisState.ANALYZING);
       videoPart = await fileToGenerativePart(file);
     } else {
-      // Large file: Attempt File API Upload
+      // Large file: MUST use File API
+      // If this fails in a browser due to CORS, we cannot fall back to inline
+      // because it will trigger 413 Entity Too Large.
       try {
         onProgress(AnalysisState.UPLOADING);
         console.log("Attempting upload via File API...");
@@ -133,18 +132,14 @@ export const analyzeVideoContent = async (
           }
         };
       } catch (uploadError: any) {
-        console.warn("File API upload failed, attempting inline fallback...", uploadError);
-        
-        // If upload fails (e.g. CORS), check if we can fallback to inline
-        if (file.size < FORCE_INLINE_FALLBACK_LIMIT) {
-           console.log("Falling back to inline data strategy.");
-           // Reset state to analyzing to show spinner
-           onProgress(AnalysisState.ANALYZING);
-           videoPart = await fileToGenerativePart(file);
-        } else {
-           // File is too big for inline fallback
-           throw new Error(`File upload failed and file is too large for browser processing (${(file.size/1024/1024).toFixed(0)}MB). Try a smaller file.`);
-        }
+        console.error("File API Upload Failed:", uploadError);
+        // We catch this specific error to provide a better message than the generic one
+        // And crucially, we DO NOT fall back to inline for files > 18MB to avoid the 413 crash.
+        throw new Error(
+          `Unable to process this file (${(file.size / 1024 / 1024).toFixed(1)}MB). ` +
+          `In this browser environment, files are limited to ~18MB unless the Gemini File API allows cross-origin uploads (which appears to be blocked). ` +
+          `Please try a smaller file.`
+        );
       }
     }
 
